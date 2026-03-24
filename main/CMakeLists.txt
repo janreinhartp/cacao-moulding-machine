@@ -1,0 +1,16 @@
+idf_component_register(
+    SRCS
+        "main.c"
+        "ui/ui_manager.c"
+        "ui/ui_screens.c"
+        "machine/machine_control.c"
+        "machine/auto_sequence.c"
+    INCLUDE_DIRS
+        "."
+        "include"
+    REQUIRES
+        peripheral
+        nvs_flash
+        esp_timer
+        esp_event
+)

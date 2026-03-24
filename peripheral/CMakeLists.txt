@@ -1,0 +1,17 @@
+idf_component_register(
+    SRCS
+        "i2c_manager.c"
+        "pcf8575.c"
+        "relay_control.c"
+        "button_input.c"
+        "oled_display.c"
+        "nvs_settings.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        driver
+        nvs_flash
+        esp_timer
+        esp_event
+        freertos
+)
