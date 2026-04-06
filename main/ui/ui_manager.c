@@ -123,17 +123,25 @@ static void handle_settings_input(button_id_t btn)
             if (s_cursor_pos > 0) s_cursor_pos--;
             break;
         case BTN_ID_NEXT:
-            if (s_cursor_pos < SETTINGS_COUNT - 1) s_cursor_pos++;
+            /* Allow cursor to reach the Save All item (index SETTINGS_COUNT) */
+            if (s_cursor_pos < SETTINGS_COUNT) s_cursor_pos++;
             break;
-        case BTN_ID_ENTER: {
-            /* Enter edit mode for the selected setting */
-            const machine_settings_t *settings = nvs_settings_get();
-            const uint16_t *vals = &settings->mixer_time_s;
-            s_edit_index = s_cursor_pos;
-            s_edit_value = vals[s_edit_index];
-            s_current_screen = UI_SCREEN_SETTINGS_EDIT;
+        case BTN_ID_ENTER:
+            if (s_cursor_pos == SETTINGS_COUNT) {
+                /* Save All: persist current in-memory values to NVS, return to main menu */
+                nvs_settings_save_all();
+                s_current_screen = UI_SCREEN_SETTINGS_SAVED;
+                s_cursor_pos = 0;
+                machine_request_state(MACHINE_STATE_MENU_NAVIGATION);
+            } else {
+                /* Enter edit mode for the selected setting */
+                const machine_settings_t *settings = nvs_settings_get();
+                const uint16_t *vals = &settings->mixer_time_s;
+                s_edit_index = s_cursor_pos;
+                s_edit_value = vals[s_edit_index];
+                s_current_screen = UI_SCREEN_SETTINGS_EDIT;
+            }
             break;
-        }
         default:
             break;
     }
@@ -149,8 +157,8 @@ static void handle_settings_edit_input(button_id_t btn)
             if (s_edit_value < 999) s_edit_value++;
             break;
         case BTN_ID_ENTER:
-            /* Save and return to settings list */
-            nvs_settings_set(s_edit_index, s_edit_value);
+            /* Update in-memory only; user must press Save All to persist */
+            nvs_settings_update(s_edit_index, s_edit_value);
             s_current_screen = UI_SCREEN_SETTINGS;
             break;
         default:
@@ -168,21 +176,21 @@ static void handle_test_machine_input(button_id_t btn)
 {
     switch (btn) {
         case BTN_ID_PREV:
-            if (s_cursor_pos > 0) {
-                s_cursor_pos--;
-            } else {
-                /* Exit test mode: turn all relays off, return to menu */
-                relay_all_off();
-                s_current_screen = UI_SCREEN_MAIN_MENU;
-                s_cursor_pos = 2;
-                machine_request_state(MACHINE_STATE_MENU_NAVIGATION);
-            }
+            if (s_cursor_pos > 0) s_cursor_pos--;
             break;
         case BTN_ID_NEXT:
-            if (s_cursor_pos < RELAY_COUNT - 1) s_cursor_pos++;
+            if (s_cursor_pos < RELAY_TEST_COUNT) s_cursor_pos++;
             break;
         case BTN_ID_ENTER:
-            relay_toggle(s_cursor_pos);
+            if (s_cursor_pos == RELAY_TEST_COUNT) {
+                /* Exit: turn all relays off and return to main menu */
+                relay_all_off();
+                s_cursor_pos = 2;  /* highlight "Test Machine" in main menu */
+                s_current_screen = UI_SCREEN_MAIN_MENU;
+                machine_request_state(MACHINE_STATE_MENU_NAVIGATION);
+            } else {
+                relay_toggle(s_cursor_pos);
+            }
             break;
         default:
             break;
@@ -223,6 +231,9 @@ static void process_button_event(button_id_t btn)
         case UI_SCREEN_SETTINGS_EDIT:   handle_settings_edit_input(btn);    break;
         case UI_SCREEN_RUN_AUTO:        handle_run_auto_input(btn);         break;
         case UI_SCREEN_TEST_MACHINE:    handle_test_machine_input(btn);     break;
+        case UI_SCREEN_SETTINGS_SAVED:  /* any button returns to main menu */
+            s_current_screen = UI_SCREEN_MAIN_MENU;
+            break;
         case UI_SCREEN_EMERGENCY_STOP:  handle_emergency_stop_input(btn);   break;
         case UI_SCREEN_ERROR:           handle_error_input(btn);            break;
         default: break;
@@ -248,6 +259,10 @@ static void render_current_screen(void)
 
         case UI_SCREEN_SETTINGS_EDIT:
             ui_screen_settings_edit(s_edit_index, s_edit_value);
+            break;
+
+        case UI_SCREEN_SETTINGS_SAVED:
+            ui_screen_settings_saved();
             break;
 
         case UI_SCREEN_RUN_AUTO: {

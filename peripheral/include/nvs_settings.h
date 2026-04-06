@@ -33,12 +33,26 @@ esp_err_t nvs_settings_init(void);
 const machine_settings_t *nvs_settings_get(void);
 
 /**
- * @brief Update a single setting by index and persist to NVS.
+ * @brief Update a single setting in memory only (no NVS write).
+ * @param index Setting index (0=mixer, 1=mould_a, 2=mould_b, 3=release, 4=heater).
+ * @param value New value in seconds.
+ * @return ESP_OK on success.
+ */
+esp_err_t nvs_settings_update(uint8_t index, uint16_t value);
+
+/**
+ * @brief Update a single setting by index and persist to NVS immediately.
  * @param index Setting index (0=mixer, 1=mould_a, 2=mould_b, 3=release, 4=heater).
  * @param value New value in seconds.
  * @return ESP_OK on success.
  */
 esp_err_t nvs_settings_set(uint8_t index, uint16_t value);
+
+/**
+ * @brief Persist the current in-memory settings to NVS.
+ * @return ESP_OK on success.
+ */
+esp_err_t nvs_settings_save_all(void);
 
 /**
  * @brief Reset all settings to factory defaults and persist.

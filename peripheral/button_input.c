@@ -31,11 +31,16 @@ static QueueHandle_t s_btn_queue = NULL;
 #define NUM_BUTTONS (sizeof(s_buttons) / sizeof(s_buttons[0]))
 #define DEBOUNCE_US (BUTTON_DEBOUNCE_MS * 1000)
 
+/* Long-press auto-repeat (PREV / NEXT only, id != 1) */
+#define LONG_PRESS_ENTER_ID     1       /* ENTER button index — no repeat */
+#define LONG_PRESS_DELAY_MS     500     /* hold time before repeat starts */
+#define LONG_PRESS_SLOW_MS      180     /* repeat interval: slow phase */
+#define LONG_PRESS_FAST_MS      60      /* repeat interval: fast phase */
+#define LONG_PRESS_ACCEL_STEPS  6       /* repeats before switching to fast */
+
 static void IRAM_ATTR button_isr_handler(void *arg)
 {
     int btn_id = (int)(intptr_t)arg;
-    /* Disable this button's interrupt immediately to prevent re-entry flooding */
-    gpio_intr_disable(s_buttons[btn_id].gpio);
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
     xQueueSendFromISR(s_btn_queue, &btn_id, &xHigherPriorityTaskWoken);
     portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
@@ -68,6 +73,22 @@ static void button_task(void *pvParam)
                     if (s_callback != NULL) {
                         s_callback(btn_id);
                     }
+
+                    /* Long-press repeat for PREV / NEXT only */
+                    if (btn_id != LONG_PRESS_ENTER_ID) {
+                        vTaskDelay(pdMS_TO_TICKS(LONG_PRESS_DELAY_MS));
+                        int repeat_count = 0;
+                        while (gpio_get_level(s_buttons[btn_id].gpio) == 0) {
+                            if (s_callback != NULL) {
+                                s_callback(btn_id);
+                            }
+                            repeat_count++;
+                            uint32_t interval = (repeat_count < LONG_PRESS_ACCEL_STEPS)
+                                                ? LONG_PRESS_SLOW_MS
+                                                : LONG_PRESS_FAST_MS;
+                            vTaskDelay(pdMS_TO_TICKS(interval));
+                        }
+                    }
                 }
             }
 
@@ -77,11 +98,8 @@ static void button_task(void *pvParam)
                 /* discard */
             }
 
-            /* Re-enable interrupt after debounce period */
+            /* Additional debounce hold-off before accepting the next press */
             vTaskDelay(pdMS_TO_TICKS(BUTTON_DEBOUNCE_MS));
-            for (int i = 0; i < (int)NUM_BUTTONS; i++) {
-                gpio_intr_enable(s_buttons[i].gpio);
-            }
         }
     }
 }

@@ -52,6 +52,26 @@ CACAO-MOULDING-MACHINE/
 | `ui_task`      | 3        | 4096   | OLED rendering, menu navigation         |
 | `machine_task` | 5        | 4096   | State machine, auto-sequence, relays    |
 
+### System Timing Constants
+
+| Constant | Value | Purpose |
+|---|---|---|
+| `BUTTON_DEBOUNCE_MS` | 200 ms | Minimum gap between accepted button presses |
+| `UI_REFRESH_INTERVAL_MS` | 100 ms | OLED redraw period |
+| `WATCHDOG_TIMEOUT_S` | 30 s | Task watchdog timeout |
+
+### Event Types (`app_event_type_t`)
+
+| Event | Description |
+|---|---|
+| `EVT_BUTTON_PRESS` | Button press detected (carries `button_id_t`) |
+| `EVT_MACHINE_STATE_CHANGE` | State transition request (carries `machine_state_t`) |
+| `EVT_RELAY_ACTION` | Relay command (carries relay index + on/off flag) |
+| `EVT_TIMER_EXPIRED` | Step timer elapsed (carries `auto_step_t` + remaining_s) |
+| `EVT_ERROR` | Fault (carries error code + 32-char message) |
+| `EVT_EMERGENCY_STOP` | Emergency stop triggered |
+| `EVT_SELF_TEST_RESULT` | Self-test outcome (carries bool passed) |
+
 ### Inter-Task Communication
 
 ```
@@ -127,25 +147,31 @@ CACAO-MOULDING-MACHINE/
 
 #### `i2c_manager`
 - Initializes the I2C master bus (ESP-IDF v5.x new driver API)
+- Bus config: I2C_NUM_0, 400 kHz, glitch filter = 7 cycles, internal pullups
 - Provides mutex-protected access for shared bus (OLED + PCF8575)
-- Lock/unlock functions for thread-safe I2C transactions
+- `i2c_manager_lock(timeout_ms)` / `i2c_manager_unlock()` — binary semaphore wrappers
+- `i2c_manager_get_bus()` — returns bus handle (NULL if not initialised)
 
 #### `pcf8575`
 - 16-bit I/O expander driver
-- Cached output state for efficient single-pin operations
-- Interrupt support (negative edge on GPIO7)
-- All I2C operations go through i2c_manager mutex
+- Cached output state (`s_output_state`, default 0xFFFF — all HIGH) for efficient single-pin operations
+- P0–P7 (low byte): relay outputs; P10–P17 (high byte): available, currently unused
+- Interrupt support (negative edge on GPIO7); ISR uses `vTaskNotifyGiveFromISR()` — not used by sequence control
+- All I2C operations go through i2c_manager mutex (100ms timeout)
 
 #### `relay_control`
 - **Critical**: LOW-level trigger logic
   - Relay ON  = PCF8575 pin LOW  (bit cleared)
   - Relay OFF = PCF8575 pin HIGH (bit set)
-- Abstract ON/OFF/toggle/all-off operations
-- Tracks relay states in a local bitmask for fast queries
+- API: `relay_on(idx)`, `relay_off(idx)`, `relay_toggle(idx)`, `relay_all_off()`, `relay_is_on(idx)`
+- Tracks relay states in a local bitmask (`s_relay_state`) for fast queries — no I2C read needed
 
 #### `button_input`
 - ISR-driven with FreeRTOS queue for deferred processing
-- Software debouncing (50ms default) using `esp_timer_get_time()`
+- Software debouncing (200ms via `BUTTON_DEBOUNCE_MS`) using `esp_timer_get_time()`
+  - ISR disables interrupt and queues button ID
+  - Task waits 50ms for signal to settle, verifies pin still LOW
+  - Requires ≥200ms since last confirmed press
 - Callback function invoked from task context (safe for any operation)
 
 #### `oled_display`
@@ -155,9 +181,12 @@ CACAO-MOULDING-MACHINE/
 - All rendering happens in framebuffer → single I2C flush
 
 #### `nvs_settings`
-- Stores `machine_settings_t` as a blob in NVS namespace `"cacao_cfg"`
-- Loads on boot, applies defaults if no valid settings found
-- Individual field update + save, or full reset to defaults
+- Stores `machine_settings_t` as a blob in NVS namespace `"cacao_cfg"`, key `"settings"`
+- `machine_settings_t`: five `uint16_t` fields indexed 0–4 (Mixer, Mould A, Mould B, Release, Heater)
+- Loads on boot, applies defaults if no valid settings found; handles NVS version mismatch by erasing and reinitialising
+- `nvs_settings_get()` — returns const pointer (never NULL after init)
+- `nvs_settings_set(index, value)` — update single field and persist
+- `nvs_settings_reset_defaults()` — restore factory values and save
 
 ### Application Layer
 
@@ -171,7 +200,15 @@ CACAO-MOULDING-MACHINE/
 - Non-blocking timer-based sequential automation
 - Steps: Mixer → Mould A → Mould B → Release → Heater → Complete
 - Each step activates its relay for the configured duration (from NVS)
-- `auto_sequence_tick()` called periodically from machine task
+- Timing via `esp_timer_get_time()` (64-bit µs counter) for sub-second precision
+- API:
+  - `auto_sequence_start()` — reset and start from Mixer step
+  - `auto_sequence_stop()` — abort, turn relays off
+  - `auto_sequence_tick()` — call every ~100ms; returns `true` while running, `false` when complete/stopped
+  - `auto_sequence_get_step()` — current `auto_step_t` enum value
+  - `auto_sequence_get_remaining_s()` — seconds left in current step
+  - `auto_sequence_get_total_s()` — total duration of current step
+  - `auto_sequence_get_step_name()` — human-readable name ("Mixing", "Mould A", "Mould B", "Release", "Heating")
 
 #### `ui_manager`
 - Runs the UI FreeRTOS task
@@ -182,7 +219,8 @@ CACAO-MOULDING-MACHINE/
 
 #### `ui_screens`
 - Pure rendering functions (no state management)
-- Screens: Splash, Main Menu, Settings List, Settings Edit, Run Auto, Test Machine, Emergency Stop, Self-Test, Error
+- Screens: Splash, Main Menu, Settings List, Settings Edit, Settings Saved, Run Auto, Run Complete, Test Machine, Emergency Stop, Self-Test, Error
+- Settings edit value range: 1–999 seconds
 
 ---
 

@@ -90,7 +90,7 @@ const machine_settings_t *nvs_settings_get(void)
     return &s_settings;
 }
 
-esp_err_t nvs_settings_set(uint8_t index, uint16_t value)
+static esp_err_t update_field(uint8_t index, uint16_t value)
 {
     if (!s_initialized || index >= SETTINGS_COUNT) {
         return ESP_ERR_INVALID_ARG;
@@ -105,7 +105,28 @@ esp_err_t nvs_settings_set(uint8_t index, uint16_t value)
     };
 
     *fields[index] = value;
-    ESP_LOGI(TAG, "Setting[%d] = %u s", index, value);
+    ESP_LOGI(TAG, "Setting[%d] = %u s (in-memory)", index, value);
+    return ESP_OK;
+}
+
+esp_err_t nvs_settings_update(uint8_t index, uint16_t value)
+{
+    return update_field(index, value);
+}
+
+esp_err_t nvs_settings_set(uint8_t index, uint16_t value)
+{
+    esp_err_t ret = update_field(index, value);
+    if (ret != ESP_OK) return ret;
+    return save_to_nvs();
+}
+
+esp_err_t nvs_settings_save_all(void)
+{
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    ESP_LOGI(TAG, "Saving all settings to NVS");
     return save_to_nvs();
 }
 

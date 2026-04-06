@@ -40,6 +40,7 @@ extern "C" {
 #define RELAY_SPARE_2           6   /* P06 */
 #define RELAY_SPARE_3           7   /* P07 */
 #define RELAY_COUNT             8
+#define RELAY_TEST_COUNT        5   /* Functional relays shown in test screen (no spares) */
 
 /* ─── Relay names for UI display ─── */
 #define RELAY_NAMES { \
@@ -65,7 +66,7 @@ extern "C" {
 #define TASK_UI_PRIORITY            3
 #define TASK_MACHINE_STACK_SIZE     4096
 #define TASK_MACHINE_PRIORITY       5
-#define TASK_INPUT_STACK_SIZE       2048
+#define TASK_INPUT_STACK_SIZE       4096
 #define TASK_INPUT_PRIORITY         4
 
 /* ─── System Timing ─── */

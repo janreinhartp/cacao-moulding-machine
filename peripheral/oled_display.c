@@ -1,146 +1,100 @@
-/**
+﻿/**
  * @file oled_display.c
- * @brief SSD1306 128x64 OLED display driver over I2C.
- *
- * Uses a simple 5x7 font for text rendering, suitable for menu UI.
+ * @brief SSD1306 128x64 OLED display driver using the u8g2 library over I2C.
  */
 
 #include "oled_display.h"
 #include "i2c_manager.h"
 #include "board_config.h"
 #include "esp_log.h"
-#include <string.h>
+#include "esp_rom_sys.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "driver/i2c_master.h"
 
 static const char *TAG = "oled";
 
+static u8g2_t s_u8g2;
 static i2c_master_dev_handle_t s_oled_dev = NULL;
 
-/* Frame buffer: 128 columns x 8 pages = 1024 bytes */
-#define FB_SIZE (OLED_WIDTH * (OLED_HEIGHT / 8))
-static uint8_t s_framebuf[FB_SIZE];
+/* Accumulated I2C write buffer for a single u8g2 transfer */
+#define I2C_BUF_MAX 256
+static uint8_t s_i2c_buf[I2C_BUF_MAX];
+static uint16_t s_i2c_buf_len = 0;
 
-/* Minimal 5x7 font (ASCII 32–127) */
-static const uint8_t font5x7[][5] = {
-    {0x00,0x00,0x00,0x00,0x00}, /* space */
-    {0x00,0x00,0x5F,0x00,0x00}, /* ! */
-    {0x00,0x07,0x00,0x07,0x00}, /* " */
-    {0x14,0x7F,0x14,0x7F,0x14}, /* # */
-    {0x24,0x2A,0x7F,0x2A,0x12}, /* $ */
-    {0x23,0x13,0x08,0x64,0x62}, /* % */
-    {0x36,0x49,0x55,0x22,0x50}, /* & */
-    {0x00,0x05,0x03,0x00,0x00}, /* ' */
-    {0x00,0x1C,0x22,0x41,0x00}, /* ( */
-    {0x00,0x41,0x22,0x1C,0x00}, /* ) */
-    {0x08,0x2A,0x1C,0x2A,0x08}, /* * */
-    {0x08,0x08,0x3E,0x08,0x08}, /* + */
-    {0x00,0x50,0x30,0x00,0x00}, /* , */
-    {0x08,0x08,0x08,0x08,0x08}, /* - */
-    {0x00,0x60,0x60,0x00,0x00}, /* . */
-    {0x20,0x10,0x08,0x04,0x02}, /* / */
-    {0x3E,0x51,0x49,0x45,0x3E}, /* 0 */
-    {0x00,0x42,0x7F,0x40,0x00}, /* 1 */
-    {0x42,0x61,0x51,0x49,0x46}, /* 2 */
-    {0x21,0x41,0x45,0x4B,0x31}, /* 3 */
-    {0x18,0x14,0x12,0x7F,0x10}, /* 4 */
-    {0x27,0x45,0x45,0x45,0x39}, /* 5 */
-    {0x3C,0x4A,0x49,0x49,0x30}, /* 6 */
-    {0x01,0x71,0x09,0x05,0x03}, /* 7 */
-    {0x36,0x49,0x49,0x49,0x36}, /* 8 */
-    {0x06,0x49,0x49,0x29,0x1E}, /* 9 */
-    {0x00,0x36,0x36,0x00,0x00}, /* : */
-    {0x00,0x56,0x36,0x00,0x00}, /* ; */
-    {0x00,0x08,0x14,0x22,0x41}, /* < */
-    {0x14,0x14,0x14,0x14,0x14}, /* = */
-    {0x41,0x22,0x14,0x08,0x00}, /* > */
-    {0x02,0x01,0x51,0x09,0x06}, /* ? */
-    {0x32,0x49,0x79,0x41,0x3E}, /* @ */
-    {0x7E,0x11,0x11,0x11,0x7E}, /* A */
-    {0x7F,0x49,0x49,0x49,0x36}, /* B */
-    {0x3E,0x41,0x41,0x41,0x22}, /* C */
-    {0x7F,0x41,0x41,0x22,0x1C}, /* D */
-    {0x7F,0x49,0x49,0x49,0x41}, /* E */
-    {0x7F,0x09,0x09,0x01,0x01}, /* F */
-    {0x3E,0x41,0x41,0x51,0x32}, /* G */
-    {0x7F,0x08,0x08,0x08,0x7F}, /* H */
-    {0x00,0x41,0x7F,0x41,0x00}, /* I */
-    {0x20,0x40,0x41,0x3F,0x01}, /* J */
-    {0x7F,0x08,0x14,0x22,0x41}, /* K */
-    {0x7F,0x40,0x40,0x40,0x40}, /* L */
-    {0x7F,0x02,0x04,0x02,0x7F}, /* M */
-    {0x7F,0x04,0x08,0x10,0x7F}, /* N */
-    {0x3E,0x41,0x41,0x41,0x3E}, /* O */
-    {0x7F,0x09,0x09,0x09,0x06}, /* P */
-    {0x3E,0x41,0x51,0x21,0x5E}, /* Q */
-    {0x7F,0x09,0x19,0x29,0x46}, /* R */
-    {0x46,0x49,0x49,0x49,0x31}, /* S */
-    {0x01,0x01,0x7F,0x01,0x01}, /* T */
-    {0x3F,0x40,0x40,0x40,0x3F}, /* U */
-    {0x1F,0x20,0x40,0x20,0x1F}, /* V */
-    {0x7F,0x20,0x18,0x20,0x7F}, /* W */
-    {0x63,0x14,0x08,0x14,0x63}, /* X */
-    {0x03,0x04,0x78,0x04,0x03}, /* Y */
-    {0x61,0x51,0x49,0x45,0x43}, /* Z */
-    {0x00,0x00,0x7F,0x41,0x41}, /* [ */
-    {0x02,0x04,0x08,0x10,0x20}, /* \ */
-    {0x41,0x41,0x7F,0x00,0x00}, /* ] */
-    {0x04,0x02,0x01,0x02,0x04}, /* ^ */
-    {0x40,0x40,0x40,0x40,0x40}, /* _ */
-    {0x00,0x01,0x02,0x04,0x00}, /* ` */
-    {0x20,0x54,0x54,0x54,0x78}, /* a */
-    {0x7F,0x48,0x44,0x44,0x38}, /* b */
-    {0x38,0x44,0x44,0x44,0x20}, /* c */
-    {0x38,0x44,0x44,0x48,0x7F}, /* d */
-    {0x38,0x54,0x54,0x54,0x18}, /* e */
-    {0x08,0x7E,0x09,0x01,0x02}, /* f */
-    {0x08,0x54,0x54,0x54,0x3C}, /* g */
-    {0x7F,0x08,0x04,0x04,0x78}, /* h */
-    {0x00,0x44,0x7D,0x40,0x00}, /* i */
-    {0x20,0x40,0x44,0x3D,0x00}, /* j */
-    {0x00,0x7F,0x10,0x28,0x44}, /* k */
-    {0x00,0x41,0x7F,0x40,0x00}, /* l */
-    {0x7C,0x04,0x18,0x04,0x78}, /* m */
-    {0x7C,0x08,0x04,0x04,0x78}, /* n */
-    {0x38,0x44,0x44,0x44,0x38}, /* o */
-    {0x7C,0x14,0x14,0x14,0x08}, /* p */
-    {0x08,0x14,0x14,0x18,0x7C}, /* q */
-    {0x7C,0x08,0x04,0x04,0x08}, /* r */
-    {0x48,0x54,0x54,0x54,0x20}, /* s */
-    {0x04,0x3F,0x44,0x40,0x20}, /* t */
-    {0x3C,0x40,0x40,0x20,0x7C}, /* u */
-    {0x1C,0x20,0x40,0x20,0x1C}, /* v */
-    {0x3C,0x40,0x30,0x40,0x3C}, /* w */
-    {0x44,0x28,0x10,0x28,0x44}, /* x */
-    {0x0C,0x50,0x50,0x50,0x3C}, /* y */
-    {0x44,0x64,0x54,0x4C,0x44}, /* z */
-    {0x00,0x08,0x36,0x41,0x00}, /* { */
-    {0x00,0x00,0x7F,0x00,0x00}, /* | */
-    {0x00,0x41,0x36,0x08,0x00}, /* } */
-    {0x08,0x08,0x2A,0x1C,0x08}, /* ~ */
-};
-
-/* Send a command byte to the SSD1306 */
-static esp_err_t oled_send_cmd(uint8_t cmd)
+/* ---------------------------------------------------------------------------
+ * u8x8 byte-level I2C callback
+ * --------------------------------------------------------------------------*/
+static uint8_t u8x8_byte_esp_idf_i2c(u8x8_t *u8x8, uint8_t msg,
+                                      uint8_t arg_int, void *arg_ptr)
 {
-    uint8_t buf[2] = { 0x00, cmd }; /* Co=0, D/C#=0 */
+    switch (msg) {
+        case U8X8_MSG_BYTE_INIT:
+            break;
 
-    if (!i2c_manager_lock(100)) {
-        return ESP_ERR_TIMEOUT;
+        case U8X8_MSG_BYTE_SET_DC:
+            /* Not used by I2C transports */
+            break;
+
+        case U8X8_MSG_BYTE_START_TRANSFER:
+            s_i2c_buf_len = 0;
+            break;
+
+        case U8X8_MSG_BYTE_SEND: {
+            const uint8_t *src = (const uint8_t *)arg_ptr;
+            for (uint8_t i = 0; i < arg_int; i++) {
+                if (s_i2c_buf_len < I2C_BUF_MAX) {
+                    s_i2c_buf[s_i2c_buf_len++] = src[i];
+                }
+            }
+            break;
+        }
+
+        case U8X8_MSG_BYTE_END_TRANSFER:
+            if (s_oled_dev != NULL && s_i2c_buf_len > 0) {
+                if (i2c_manager_lock(100)) {
+                    i2c_master_transmit(s_oled_dev, s_i2c_buf, s_i2c_buf_len, 100);
+                    i2c_manager_unlock();
+                }
+            }
+            break;
+
+        default:
+            return 0;
     }
-    esp_err_t ret = i2c_master_transmit(s_oled_dev, buf, 2, 100);
-    i2c_manager_unlock();
-    return ret;
+    return 1;
 }
 
-/* Send a sequence of command bytes */
-static esp_err_t oled_send_cmds(const uint8_t *cmds, size_t len)
+/* ---------------------------------------------------------------------------
+ * u8x8 GPIO / delay callback
+ * --------------------------------------------------------------------------*/
+static uint8_t u8x8_gpio_delay_esp_idf(u8x8_t *u8x8, uint8_t msg,
+                                        uint8_t arg_int, void *arg_ptr)
 {
-    for (size_t i = 0; i < len; i++) {
-        esp_err_t ret = oled_send_cmd(cmds[i]);
-        if (ret != ESP_OK) return ret;
+    switch (msg) {
+        case U8X8_MSG_GPIO_AND_DELAY_INIT:
+            break;
+        case U8X8_MSG_DELAY_MILLI:
+            vTaskDelay(pdMS_TO_TICKS(arg_int ? arg_int : 1));
+            break;
+        case U8X8_MSG_DELAY_10MICRO:
+            esp_rom_delay_us(10);
+            break;
+        case U8X8_MSG_DELAY_100NANO:
+            esp_rom_delay_us(1);
+            break;
+        case U8X8_MSG_GPIO_RESET:
+            /* No physical reset pin wired */
+            break;
+        default:
+            return 0;
     }
-    return ESP_OK;
+    return 1;
 }
 
+/* ---------------------------------------------------------------------------
+ * Public API
+ * --------------------------------------------------------------------------*/
 esp_err_t oled_display_init(void)
 {
     i2c_master_bus_handle_t bus = i2c_manager_get_bus();
@@ -149,140 +103,39 @@ esp_err_t oled_display_init(void)
         return ESP_ERR_INVALID_STATE;
     }
 
-    i2c_device_config_t dev_config = {
-        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
-        .device_address = OLED_I2C_ADDR,
-        .scl_speed_hz = BOARD_I2C_FREQ_HZ,
+    i2c_device_config_t dev_cfg = {
+        .dev_addr_length  = I2C_ADDR_BIT_LEN_7,
+        .device_address   = OLED_I2C_ADDR,
+        .scl_speed_hz     = BOARD_I2C_FREQ_HZ,
     };
 
-    esp_err_t ret = i2c_master_bus_add_device(bus, &dev_config, &s_oled_dev);
+    esp_err_t ret = i2c_master_bus_add_device(bus, &dev_cfg, &s_oled_dev);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to add OLED device: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Failed to add OLED I2C device: %s", esp_err_to_name(ret));
         return ret;
     }
 
-    /* SSD1306 initialization sequence for 128x64 */
-    static const uint8_t init_cmds[] = {
-        0xAE,       /* Display OFF */
-        0xD5, 0x80, /* Set display clock */
-        0xA8, 0x3F, /* Set multiplex ratio (64-1) */
-        0xD3, 0x00, /* Set display offset = 0 */
-        0x40,       /* Set start line = 0 */
-        0x8D, 0x14, /* Enable charge pump */
-        0x20, 0x00, /* Horizontal addressing mode */
-        0xA1,       /* Segment remap */
-        0xC8,       /* COM output scan direction */
-        0xDA, 0x12, /* COM pins configuration */
-        0x81, 0xCF, /* Set contrast */
-        0xD9, 0xF1, /* Set pre-charge period */
-        0xDB, 0x40, /* Set VCOMH deselect level */
-        0xA4,       /* Display from RAM */
-        0xA6,       /* Normal display (not inverted) */
-        0xAF,       /* Display ON */
-    };
+    /* u8g2 setup: SSD1306 128x64, full-frame-buffer mode, hardware I2C */
+    u8g2_Setup_ssd1306_i2c_128x64_noname_f(
+        &s_u8g2,
+        U8G2_R0,
+        u8x8_byte_esp_idf_i2c,
+        u8x8_gpio_delay_esp_idf
+    );
 
-    ret = oled_send_cmds(init_cmds, sizeof(init_cmds));
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "OLED init commands failed: %s", esp_err_to_name(ret));
-        return ret;
-    }
+    /* Inform u8g2 of the 7-bit I2C address (stored internally as addr << 1) */
+    u8x8_SetI2CAddress(&s_u8g2.u8x8, OLED_I2C_ADDR << 1);
 
-    oled_clear();
-    ret = oled_flush();
+    u8g2_InitDisplay(&s_u8g2);
+    u8g2_SetPowerSave(&s_u8g2, 0); /* Wake display */
+    u8g2_ClearBuffer(&s_u8g2);
+    u8g2_SendBuffer(&s_u8g2);
 
-    ESP_LOGI(TAG, "OLED display initialized (%dx%d)", OLED_WIDTH, OLED_HEIGHT);
-    return ret;
+    ESP_LOGI(TAG, "OLED display initialized via u8g2 (%dx%d)", OLED_WIDTH, OLED_HEIGHT);
+    return ESP_OK;
 }
 
-void oled_clear(void)
+u8g2_t *oled_get_u8g2(void)
 {
-    memset(s_framebuf, 0x00, FB_SIZE);
-}
-
-esp_err_t oled_flush(void)
-{
-    if (s_oled_dev == NULL) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    /* Set column and page address range */
-    oled_send_cmd(0x21); oled_send_cmd(0x00); oled_send_cmd(0x7F); /* Column 0–127 */
-    oled_send_cmd(0x22); oled_send_cmd(0x00); oled_send_cmd(0x07); /* Page 0–7 */
-
-    /* Send framebuffer in chunks (I2C has limited buffer) */
-    static uint8_t tx_buf[129]; /* 1 control byte + 128 data bytes */
-    tx_buf[0] = 0x40; /* Co=0, D/C#=1 (data) */
-
-    if (!i2c_manager_lock(200)) {
-        return ESP_ERR_TIMEOUT;
-    }
-
-    esp_err_t ret = ESP_OK;
-    for (int page = 0; page < 8; page++) {
-        memcpy(&tx_buf[1], &s_framebuf[page * OLED_WIDTH], OLED_WIDTH);
-        ret = i2c_master_transmit(s_oled_dev, tx_buf, 129, 200);
-        if (ret != ESP_OK) break;
-    }
-
-    i2c_manager_unlock();
-    return ret;
-}
-
-void oled_draw_string(uint8_t x, uint8_t y, const char *str, bool inverted)
-{
-    if (str == NULL || y >= 8) return;
-
-    uint8_t *page_buf = &s_framebuf[y * OLED_WIDTH];
-
-    while (*str && x < OLED_WIDTH) {
-        char c = *str++;
-        if (c < 32 || c > 126) c = '?';
-
-        const uint8_t *glyph = font5x7[c - 32];
-        for (int col = 0; col < 5 && x < OLED_WIDTH; col++, x++) {
-            page_buf[x] = inverted ? ~glyph[col] : glyph[col];
-        }
-        /* 1 pixel gap between characters */
-        if (x < OLED_WIDTH) {
-            page_buf[x] = inverted ? 0xFF : 0x00;
-            x++;
-        }
-    }
-}
-
-void oled_draw_hline(uint8_t y)
-{
-    if (y >= 8) return;
-    uint8_t *page_buf = &s_framebuf[y * OLED_WIDTH];
-    /* Draw at bottom of the page */
-    for (int x = 0; x < OLED_WIDTH; x++) {
-        page_buf[x] |= 0x80;
-    }
-}
-
-void oled_draw_title(const char *title)
-{
-    if (title == NULL) return;
-    size_t len = strlen(title);
-    uint8_t x = (OLED_WIDTH - (uint8_t)(len * 6)) / 2;
-    oled_draw_string(x, 0, title, true);
-}
-
-void oled_draw_progress_bar(uint8_t x, uint8_t y, uint8_t width, uint8_t progress)
-{
-    if (y >= 8 || width == 0) return;
-    if (progress > 100) progress = 100;
-
-    uint8_t *page_buf = &s_framebuf[y * OLED_WIDTH];
-    uint8_t fill = (uint8_t)((uint16_t)width * progress / 100);
-
-    for (uint8_t i = 0; i < width && (x + i) < OLED_WIDTH; i++) {
-        if (i == 0 || i == width - 1) {
-            page_buf[x + i] = 0x7E; /* Border */
-        } else if (i < fill) {
-            page_buf[x + i] = 0x7E; /* Filled */
-        } else {
-            page_buf[x + i] = 0x42; /* Empty */
-        }
-    }
+    return &s_u8g2;
 }
