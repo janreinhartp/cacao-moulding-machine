@@ -213,7 +213,7 @@ void ui_screen_settings_saved(void)
     u8g2_SendBuffer(u8g2);
 }
 
-void ui_screen_run_auto(const char *step_name, uint32_t remaining_s, uint32_t total_s)
+void ui_screen_run_auto(const char *step_name, uint32_t remaining_s, uint32_t total_s, uint16_t cycle_count)
 {
     u8g2_t *u8g2 = oled_get_u8g2();
     u8g2_ClearBuffer(u8g2);
@@ -249,6 +249,16 @@ void ui_screen_run_auto(const char *step_name, uint32_t remaining_s, uint32_t to
         }
     }
 
+    /* Cycle count (left) and total balls (right) on the same row */
+    uint16_t balls = (uint16_t)(cycle_count * BALLS_PER_CYCLE);
+    char cyc_str[12];
+    snprintf(cyc_str, sizeof(cyc_str), "Cyc: %u", cycle_count);
+    char ball_str[14];
+    snprintf(ball_str, sizeof(ball_str), "Balls: %u", balls);
+    u8g2_DrawStr(u8g2, 2, Y_ROW4, cyc_str);
+    uint8_t bx = (uint8_t)(DISPLAY_W - u8g2_GetStrWidth(u8g2, ball_str));
+    u8g2_DrawStr(u8g2, bx, Y_ROW4, ball_str);
+
     draw_hint(u8g2, "ALL BTNS = E-STOP");
     u8g2_SendBuffer(u8g2);
 }
@@ -272,8 +282,59 @@ void ui_screen_run_complete(void)
     u8g2_SendBuffer(u8g2);
 }
 
+void ui_screen_release_wait(void)
+{
+    u8g2_t *u8g2 = oled_get_u8g2();
+    u8g2_ClearBuffer(u8g2);
+    u8g2_SetFont(u8g2, FONT_BODY);
+
+    draw_title_bar(u8g2, "RELEASE");
+
+    u8g2_SetDrawColor(u8g2, 1);
+    u8g2_SetFontMode(u8g2, 1);
+
+    const char *l1 = "Release running";
+    uint8_t w1 = (uint8_t)u8g2_GetStrWidth(u8g2, l1);
+    u8g2_DrawStr(u8g2, (DISPLAY_W - w1) / 2, Y_ROW2, l1);
+
+    const char *l2 = "Remove cacao";
+    uint8_t w2 = (uint8_t)u8g2_GetStrWidth(u8g2, l2);
+    u8g2_DrawStr(u8g2, (DISPLAY_W - w2) / 2, Y_ROW3, l2);
+
+    draw_hint(u8g2, "ENTER when done");
+    u8g2_SendBuffer(u8g2);
+}
+
+void ui_screen_mould_confirm(uint16_t cycle_count)
+{
+    u8g2_t *u8g2 = oled_get_u8g2();
+    u8g2_ClearBuffer(u8g2);
+    u8g2_SetFont(u8g2, FONT_BODY);
+
+    draw_title_bar(u8g2, "MOULDING");
+
+    u8g2_SetDrawColor(u8g2, 1);
+    u8g2_SetFontMode(u8g2, 1);
+
+    char l1[22];
+    snprintf(l1, sizeof(l1), "Cycle #%u done!", cycle_count);
+    uint8_t w1 = (uint8_t)u8g2_GetStrWidth(u8g2, l1);
+    u8g2_DrawStr(u8g2, (DISPLAY_W - w1) / 2, Y_ROW2, l1);
+
+    uint16_t balls = (uint16_t)(cycle_count * BALLS_PER_CYCLE);
+    char l2[20];
+    snprintf(l2, sizeof(l2), "Total balls: %u", balls);
+    uint8_t w2 = (uint8_t)u8g2_GetStrWidth(u8g2, l2);
+    u8g2_DrawStr(u8g2, (DISPLAY_W - w2) / 2, Y_ROW3, l2);
+
+    draw_hint(u8g2, "ENTER=Repeat");
+    u8g2_SendBuffer(u8g2);
+}
+
 void ui_screen_test_machine(uint8_t cursor_pos, uint8_t relay_states)
 {
+    static const uint8_t s_test_relay_list[] = RELAY_TEST_LIST;
+
     u8g2_t *u8g2 = oled_get_u8g2();
     u8g2_ClearBuffer(u8g2);
     u8g2_SetFont(u8g2, FONT_BODY);
@@ -291,8 +352,9 @@ void ui_screen_test_machine(uint8_t cursor_pos, uint8_t relay_states)
         if (idx == RELAY_TEST_COUNT) {
             snprintf(line, sizeof(line), "[ Exit ]");
         } else {
-            bool is_on = (relay_states & (1 << idx)) != 0;
-            snprintf(line, sizeof(line), "%-9s [%s]", s_relay_names[idx],
+            int pin = s_test_relay_list[idx];
+            bool is_on = (relay_states & (1 << pin)) != 0;
+            snprintf(line, sizeof(line), "%-9s [%s]", s_relay_names[pin],
                      is_on ? "ON " : "OFF");
         }
         draw_menu_row(u8g2, (uint8_t)i, line, idx == (int)cursor_pos);

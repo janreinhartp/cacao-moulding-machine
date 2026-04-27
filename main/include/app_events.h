@@ -21,6 +21,10 @@ typedef enum {
     EVT_ERROR,
     EVT_EMERGENCY_STOP,
     EVT_SELF_TEST_RESULT,
+    EVT_MOULD_CONFIRM_NEEDED,
+    EVT_MOULD_CONFIRM,
+    EVT_RELEASE_DONE_NEEDED,
+    EVT_RELEASE_DONE,
 } app_event_type_t;
 
 /* ─── Button Identifiers ─── */
@@ -46,12 +50,15 @@ typedef enum {
 /* ─── Auto Sequence Steps ─── */
 typedef enum {
     AUTO_STEP_IDLE = 0,
-    AUTO_STEP_MIXER,
-    AUTO_STEP_MOULD_A,
-    AUTO_STEP_MOULD_B,
-    AUTO_STEP_RELEASE,
-    AUTO_STEP_HEATER,
-    AUTO_STEP_COMPLETE,
+    AUTO_STEP_MOULD_A_POS,       /* Mould A moving into position under mixer */
+    AUTO_STEP_MIXER_FILL,        /* Mixer filling Mould A */
+    AUTO_STEP_MOULD_A_RETURN,    /* Mould A returning to neutral */
+    AUTO_STEP_PRESS_1,           /* Mould B first press */
+    AUTO_STEP_PRESS_SETTLE,      /* Settle between presses */
+    AUTO_STEP_PRESS_2,           /* Mould B second press */
+    AUTO_STEP_PRE_RELEASE,       /* Settle before release fires */
+    AUTO_STEP_RELEASE,           /* Release ON – waiting for operator ENTER */
+    AUTO_STEP_MOULD_CONFIRM,     /* Release OFF – waiting for operator to repeat */
 } auto_step_t;
 
 /* ─── Event Payload ─── */

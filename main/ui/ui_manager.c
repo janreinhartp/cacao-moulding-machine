@@ -28,11 +28,7 @@ static char s_auto_step_name[16] = "";
 static uint32_t s_auto_remaining = 0;
 static uint32_t s_auto_total = 0;
 static char s_error_msg[32] = "";
-
-/* Track all-buttons-pressed state for emergency stop detection */
-static bool s_btn_prev_pressed = false;
-static bool s_btn_enter_pressed = false;
-static bool s_btn_next_pressed = false;
+static uint16_t s_cycle_count = 0;
 
 void ui_set_screen(ui_screen_t screen)
 {
@@ -56,34 +52,6 @@ void ui_update_auto_run(const char *step_name, uint32_t remaining_s, uint32_t to
     s_auto_total = total_s;
 }
 
-/* Check if all three buttons were pressed simultaneously for e-stop */
-static void check_emergency_stop(button_id_t btn)
-{
-    switch (btn) {
-        case BTN_ID_PREV:  s_btn_prev_pressed = true;  break;
-        case BTN_ID_ENTER: s_btn_enter_pressed = true;  break;
-        case BTN_ID_NEXT:  s_btn_next_pressed = true;   break;
-        default: break;
-    }
-
-    if (s_btn_prev_pressed && s_btn_enter_pressed && s_btn_next_pressed) {
-        ESP_LOGW(TAG, "EMERGENCY STOP triggered by all buttons");
-        machine_emergency_stop();
-        s_current_screen = UI_SCREEN_EMERGENCY_STOP;
-        s_btn_prev_pressed = false;
-        s_btn_enter_pressed = false;
-        s_btn_next_pressed = false;
-    }
-}
-
-/* Clear emergency button tracking on timeout (called if not all pressed together) */
-static void reset_emergency_tracking(void)
-{
-    s_btn_prev_pressed = false;
-    s_btn_enter_pressed = false;
-    s_btn_next_pressed = false;
-}
-
 static void handle_main_menu_input(button_id_t btn)
 {
     switch (btn) {
@@ -101,6 +69,7 @@ static void handle_main_menu_input(button_id_t btn)
                     machine_request_state(MACHINE_STATE_SETTINGS);
                     break;
                 case 1:
+                    s_cycle_count = 0;
                     s_current_screen = UI_SCREEN_RUN_AUTO;
                     machine_request_state(MACHINE_STATE_RUN_AUTO);
                     break;
@@ -136,7 +105,7 @@ static void handle_settings_input(button_id_t btn)
             } else {
                 /* Enter edit mode for the selected setting */
                 const machine_settings_t *settings = nvs_settings_get();
-                const uint16_t *vals = &settings->mixer_time_s;
+                const uint16_t *vals = &settings->mixer_fill_s;
                 s_edit_index = s_cursor_pos;
                 s_edit_value = vals[s_edit_index];
                 s_current_screen = UI_SCREEN_SETTINGS_EDIT;
@@ -168,8 +137,27 @@ static void handle_settings_edit_input(button_id_t btn)
 
 static void handle_run_auto_input(button_id_t btn)
 {
-    /* During auto run, check for emergency stop (all buttons) */
-    check_emergency_stop(btn);
+    (void)btn;
+}
+
+static void handle_release_wait_input(button_id_t btn)
+{
+    if (btn == BTN_ID_ENTER) {
+        /* Notify machine task that operator has removed cacao from release */
+        app_event_t evt = { .type = EVT_RELEASE_DONE };
+        xQueueSend(g_machine_event_queue, &evt, pdMS_TO_TICKS(10));
+        s_current_screen = UI_SCREEN_RUN_AUTO;
+    }
+}
+
+static void handle_mould_confirm_input(button_id_t btn)
+{
+    if (btn == BTN_ID_ENTER) {
+        /* Send confirm to machine task to restart moulding sub-cycle */
+        app_event_t evt = { .type = EVT_MOULD_CONFIRM };
+        xQueueSend(g_machine_event_queue, &evt, pdMS_TO_TICKS(10));
+        s_current_screen = UI_SCREEN_RUN_AUTO;
+    }
 }
 
 static void handle_test_machine_input(button_id_t btn)
@@ -189,7 +177,28 @@ static void handle_test_machine_input(button_id_t btn)
                 s_current_screen = UI_SCREEN_MAIN_MENU;
                 machine_request_state(MACHINE_STATE_MENU_NAVIGATION);
             } else {
-                relay_toggle(s_cursor_pos);
+                static const uint8_t s_test_relay_list[] = RELAY_TEST_LIST;
+                uint8_t relay = s_test_relay_list[s_cursor_pos];
+                /* Safety interlock: Mould A, Mould B, and Release are mutually exclusive.
+                   Block turning one ON while another in the group is already ON. */
+                static const uint8_t s_interlock[] = { RELAY_MOULD_A, RELAY_MOULD_B, RELAY_RELEASE };
+                bool allow = true;
+                if (!relay_is_on(relay)) {
+                    for (int _i = 0; _i < 3; _i++) {
+                        if (s_interlock[_i] == relay) {
+                            for (int _j = 0; _j < 3; _j++) {
+                                if (_j != _i && relay_is_on(s_interlock[_j])) {
+                                    allow = false;
+                                    break;
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+                if (allow) {
+                    relay_toggle(relay);
+                }
             }
             break;
         default:
@@ -217,19 +226,13 @@ static void handle_error_input(button_id_t btn)
 
 static void process_button_event(button_id_t btn)
 {
-    /* Reset emergency tracking after a short period (we only track simultaneous) */
-    static int64_t last_btn_time = 0;
-    int64_t now = esp_timer_get_time();
-    if ((now - last_btn_time) > 500000) { /* 500ms window */
-        reset_emergency_tracking();
-    }
-    last_btn_time = now;
-
     switch (s_current_screen) {
         case UI_SCREEN_MAIN_MENU:       handle_main_menu_input(btn);        break;
         case UI_SCREEN_SETTINGS:        handle_settings_input(btn);         break;
         case UI_SCREEN_SETTINGS_EDIT:   handle_settings_edit_input(btn);    break;
         case UI_SCREEN_RUN_AUTO:        handle_run_auto_input(btn);         break;
+        case UI_SCREEN_RELEASE_WAIT:    handle_release_wait_input(btn);     break;
+        case UI_SCREEN_MOULD_CONFIRM:   handle_mould_confirm_input(btn);    break;
         case UI_SCREEN_TEST_MACHINE:    handle_test_machine_input(btn);     break;
         case UI_SCREEN_SETTINGS_SAVED:  /* any button returns to main menu */
             s_current_screen = UI_SCREEN_MAIN_MENU;
@@ -254,7 +257,7 @@ static void render_current_screen(void)
             break;
 
         case UI_SCREEN_SETTINGS:
-            ui_screen_settings(s_cursor_pos, &settings->mixer_time_s);
+            ui_screen_settings(s_cursor_pos, &settings->mixer_fill_s);
             break;
 
         case UI_SCREEN_SETTINGS_EDIT:
@@ -267,17 +270,23 @@ static void render_current_screen(void)
 
         case UI_SCREEN_RUN_AUTO: {
             auto_step_t step = auto_sequence_get_step();
-            if (step == AUTO_STEP_COMPLETE) {
-                ui_screen_run_complete();
-            } else {
-                ui_screen_run_auto(
-                    auto_sequence_get_step_name(),
-                    auto_sequence_get_remaining_s(),
-                    auto_sequence_get_total_s()
-                );
-            }
+            ui_screen_run_auto(
+                auto_sequence_get_step_name(),
+                auto_sequence_get_remaining_s(),
+                auto_sequence_get_total_s(),
+                s_cycle_count
+            );
+            (void)step;
             break;
         }
+
+        case UI_SCREEN_MOULD_CONFIRM:
+            ui_screen_mould_confirm(s_cycle_count);
+            break;
+
+        case UI_SCREEN_RELEASE_WAIT:
+            ui_screen_release_wait();
+            break;
 
         case UI_SCREEN_TEST_MACHINE: {
             uint8_t relay_states = 0;
@@ -326,6 +335,9 @@ static void ui_task(void *pvParam)
             switch (event.type) {
                 case EVT_BUTTON_PRESS:
                     process_button_event(event.data.button);
+                    /* Render immediately so the screen updates without waiting for the next tick */
+                    render_current_screen();
+                    last_render = xTaskGetTickCount();
                     break;
                 case EVT_MACHINE_STATE_CHANGE:
                     if (event.data.state == MACHINE_STATE_ERROR) {
@@ -336,6 +348,17 @@ static void ui_task(void *pvParam)
                     strncpy(s_error_msg, event.data.error.message, sizeof(s_error_msg) - 1);
                     s_error_msg[sizeof(s_error_msg) - 1] = '\0';
                     s_current_screen = UI_SCREEN_ERROR;
+                    break;
+                case EVT_MOULD_CONFIRM_NEEDED:
+                    s_cycle_count++;
+                    s_current_screen = UI_SCREEN_MOULD_CONFIRM;
+                    break;
+                case EVT_RELEASE_DONE_NEEDED:
+                    s_current_screen = UI_SCREEN_RELEASE_WAIT;
+                    break;
+                case EVT_EMERGENCY_STOP:
+                    machine_emergency_stop();
+                    s_current_screen = UI_SCREEN_EMERGENCY_STOP;
                     break;
                 default:
                     break;

@@ -31,35 +31,40 @@ extern "C" {
 #define OLED_HEIGHT             64
 
 /* ─── PCF8575 Relay Pin Mapping (P0–P7) ─── */
-#define RELAY_MIXER             0   /* P00 */
-#define RELAY_MOULD_A           1   /* P01 - Up/Down */
-#define RELAY_MOULD_B           2   /* P02 - Forward/Reverse */
-#define RELAY_RELEASE           3   /* P03 */
-#define RELAY_HEATER            4   /* P04 */
-#define RELAY_SPARE_1           5   /* P05 */
-#define RELAY_SPARE_2           6   /* P06 */
-#define RELAY_SPARE_3           7   /* P07 */
+/* Active relays are on the high-side pins P03–P07 */
+#define RELAY_SPARE_3           0   /* P00 */
+#define RELAY_SPARE_2           1   /* P01 */
+#define RELAY_MOULD_A           2   /* P02 - remapped from P06 (hardware fault) */
+#define RELAY_HEATER            3   /* P03 */
+#define RELAY_RELEASE           4   /* P04 */
+#define RELAY_MOULD_B           5   /* P05 */
+#define RELAY_SPARE_1           6   /* P06 - hardware fault, was Mould A */
+#define RELAY_MIXER             7   /* P07 */
 #define RELAY_COUNT             8
-#define RELAY_TEST_COUNT        5   /* Functional relays shown in test screen (no spares) */
+/* Ordered list of relay indices shown in the test machine screen (no spares) */
+#define RELAY_TEST_LIST         { RELAY_MOULD_A, RELAY_HEATER, RELAY_RELEASE, RELAY_MOULD_B, RELAY_MIXER }
+#define RELAY_TEST_COUNT        5
+#define BALLS_PER_CYCLE         6   /* moulding balls produced per completed cycle */
 
-/* ─── Relay names for UI display ─── */
+/* ─── Relay names for UI display (index 0–7 by PCF8575 pin) ─── */
 #define RELAY_NAMES { \
-    "Mixer",      \
-    "Mould A",    \
-    "Mould B",    \
-    "Release",    \
-    "Heater",     \
-    "Spare 1",    \
+    "Spare 3",    \
     "Spare 2",    \
-    "Spare 3"     \
+    "Mould A",    \
+    "Heater",     \
+    "Release",    \
+    "Mould B",    \
+    "Spare 1",    \
+    "Mixer"       \
 }
 
 /* ─── Default Timer Durations (seconds) ─── */
-#define DEFAULT_MIXER_TIME_S        30
-#define DEFAULT_MOULD_A_TIME_S      10
-#define DEFAULT_MOULD_B_TIME_S      10
-#define DEFAULT_RELEASE_TIME_S      5
-#define DEFAULT_HEATER_TIME_S       20
+#define DEFAULT_MIXER_FILL_S        15  /* Mixer run time to fill Mould A */
+#define DEFAULT_MOULD_A_IN_S        3   /* Mould A moves into position under mixer */
+#define DEFAULT_PRESS_TIME_S        5   /* Duration of each Mould B press */
+#define DEFAULT_MOULD_A_OUT_S       3   /* Mould A returns to neutral */
+#define DEFAULT_PRESS_GAP_S         2   /* Settle between two presses */
+#define DEFAULT_PRE_RELEASE_S       3   /* Settle after pressing before release fires */
 
 /* ─── FreeRTOS Task Configuration ─── */
 #define TASK_UI_STACK_SIZE          4096
@@ -70,7 +75,7 @@ extern "C" {
 #define TASK_INPUT_PRIORITY         4
 
 /* ─── System Timing ─── */
-#define BUTTON_DEBOUNCE_MS          200
+#define BUTTON_DEBOUNCE_MS          100
 #define UI_REFRESH_INTERVAL_MS      100
 #define WATCHDOG_TIMEOUT_S          30
 

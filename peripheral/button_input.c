@@ -58,14 +58,27 @@ static void button_task(void *pvParam)
                 continue;
             }
 
-            /* Debounce: wait for settle then verify pin is still LOW */
-            vTaskDelay(pdMS_TO_TICKS(50));
-            int level = gpio_get_level(s_buttons[btn_id].gpio);
+            /* Press-bounce settle: wait then verify pin is still LOW */
+            vTaskDelay(pdMS_TO_TICKS(30));
 
-            if (level == 0) {
+            if (gpio_get_level(s_buttons[btn_id].gpio) == 0) {
                 int64_t now = esp_timer_get_time();
                 if ((now - s_buttons[btn_id].last_press_us) >= DEBOUNCE_US) {
                     s_buttons[btn_id].last_press_us = now;
+
+                    /* E-stop: check all 3 GPIO pins simultaneously (hardware-level) */
+                    if (gpio_get_level(s_buttons[0].gpio) == 0 &&
+                        gpio_get_level(s_buttons[1].gpio) == 0 &&
+                        gpio_get_level(s_buttons[2].gpio) == 0) {
+                        ESP_LOGW(TAG, "[BTN] E-STOP: all 3 buttons pressed simultaneously");
+                        if (s_callback != NULL) {
+                            s_callback((int)NUM_BUTTONS); /* sentinel: E-stop */
+                        }
+                        /* Drain all pending events – e-stop takes full priority */
+                        int drain;
+                        while (xQueueReceive(s_btn_queue, &drain, 0) == pdTRUE) {}
+                        continue; /* back to xQueueReceive */
+                    }
 
                     ESP_LOGW(TAG, "[BTN] %s (GPIO%d) PRESSED",
                              btn_names[btn_id], s_buttons[btn_id].gpio);
@@ -74,8 +87,8 @@ static void button_task(void *pvParam)
                         s_callback(btn_id);
                     }
 
-                    /* Long-press repeat for PREV / NEXT only */
                     if (btn_id != LONG_PRESS_ENTER_ID) {
+                        /* PREV/NEXT: long-press auto-repeat; loop exits when released */
                         vTaskDelay(pdMS_TO_TICKS(LONG_PRESS_DELAY_MS));
                         int repeat_count = 0;
                         while (gpio_get_level(s_buttons[btn_id].gpio) == 0) {
@@ -88,18 +101,29 @@ static void button_task(void *pvParam)
                                                 : LONG_PRESS_FAST_MS;
                             vTaskDelay(pdMS_TO_TICKS(interval));
                         }
+                    } else {
+                        /* ENTER: wait for physical release before proceeding.
+                         * This ensures release-bounce ISR events arrive in the
+                         * queue BEFORE the drain below runs, so they are swept out
+                         * and cannot trigger a spurious second callback. */
+                        while (gpio_get_level(s_buttons[btn_id].gpio) == 0) {
+                            vTaskDelay(pdMS_TO_TICKS(5));
+                        }
                     }
                 }
             }
 
-            /* Drain any queued duplicates for this button */
+            /* Post-release settle: give release-bounce ISRs time to land in the queue,
+             * then drain all same-button events accumulated since this press started. */
+            vTaskDelay(pdMS_TO_TICKS(50));
             int queued_id;
             while (xQueueReceive(s_btn_queue, &queued_id, 0) == pdTRUE) {
-                /* discard */
+                if (queued_id != btn_id) {
+                    /* Different button — put it back so it isn't lost */
+                    xQueueSendToFront(s_btn_queue, &queued_id, 0);
+                    break;
+                }
             }
-
-            /* Additional debounce hold-off before accepting the next press */
-            vTaskDelay(pdMS_TO_TICKS(BUTTON_DEBOUNCE_MS));
         }
     }
 }

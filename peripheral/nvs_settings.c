@@ -13,18 +13,19 @@
 static const char *TAG = "nvs_set";
 
 #define NVS_NAMESPACE    "cacao_cfg"
-#define NVS_KEY_BLOB     "settings"
+#define NVS_KEY_BLOB     "settings_v2"
 
 static machine_settings_t s_settings;
 static bool s_initialized = false;
 
 static void apply_defaults(void)
 {
-    s_settings.mixer_time_s   = DEFAULT_MIXER_TIME_S;
-    s_settings.mould_a_time_s = DEFAULT_MOULD_A_TIME_S;
-    s_settings.mould_b_time_s = DEFAULT_MOULD_B_TIME_S;
-    s_settings.release_time_s = DEFAULT_RELEASE_TIME_S;
-    s_settings.heater_time_s  = DEFAULT_HEATER_TIME_S;
+    s_settings.mixer_fill_s  = DEFAULT_MIXER_FILL_S;
+    s_settings.mould_a_in_s  = DEFAULT_MOULD_A_IN_S;
+    s_settings.press_time_s  = DEFAULT_PRESS_TIME_S;
+    s_settings.mould_a_out_s = DEFAULT_MOULD_A_OUT_S;
+    s_settings.press_gap_s   = DEFAULT_PRESS_GAP_S;
+    s_settings.pre_release_s = DEFAULT_PRE_RELEASE_S;
 }
 
 static esp_err_t save_to_nvs(void)
@@ -97,11 +98,12 @@ static esp_err_t update_field(uint8_t index, uint16_t value)
     }
 
     uint16_t *fields[] = {
-        &s_settings.mixer_time_s,
-        &s_settings.mould_a_time_s,
-        &s_settings.mould_b_time_s,
-        &s_settings.release_time_s,
-        &s_settings.heater_time_s,
+        &s_settings.mixer_fill_s,
+        &s_settings.mould_a_in_s,
+        &s_settings.press_time_s,
+        &s_settings.mould_a_out_s,
+        &s_settings.press_gap_s,
+        &s_settings.pre_release_s,
     };
 
     *fields[index] = value;

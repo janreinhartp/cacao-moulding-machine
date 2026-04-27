@@ -23,6 +23,8 @@ static const char *TAG = "machine";
 
 static machine_state_t s_state = MACHINE_STATE_SELF_TEST;
 static TaskHandle_t s_machine_task_handle = NULL;
+static bool s_confirm_notified = false;
+static bool s_release_notified = false;
 
 static const char *state_name(machine_state_t state)
 {
@@ -84,8 +86,8 @@ bool machine_self_test(void)
 
     /* Test 3: Verify NVS settings are loaded */
     const machine_settings_t *settings = nvs_settings_get();
-    if (settings->mixer_time_s == 0) {
-        ESP_LOGW(TAG, "Self-test WARN: Mixer time is 0");
+    if (settings->mixer_fill_s == 0) {
+        ESP_LOGW(TAG, "Self-test WARN: Mixer fill time is 0");
     }
     ESP_LOGI(TAG, "  NVS settings: OK");
 
@@ -104,6 +106,8 @@ static void transition_state(machine_state_t new_state)
         case MACHINE_STATE_RUN_AUTO:
             auto_sequence_stop();
             relay_all_off();
+            s_confirm_notified = false;
+            s_release_notified = false;
             break;
         case MACHINE_STATE_TEST_MACHINE:
             relay_all_off();
@@ -166,6 +170,19 @@ static void machine_task(void *pvParam)
                     machine_emergency_stop();
                     break;
 
+                case EVT_MOULD_CONFIRM:
+                    if (s_state == MACHINE_STATE_RUN_AUTO) {
+                        auto_sequence_moulding_repeat();
+                        s_confirm_notified = false;
+                        s_release_notified = false;
+                    }
+                    break;
+                case EVT_RELEASE_DONE:
+                    if (s_state == MACHINE_STATE_RUN_AUTO) {
+                        auto_sequence_release_done();
+                        s_release_notified = false;
+                    }
+                    break;
                 default:
                     break;
             }
@@ -175,9 +192,20 @@ static void machine_task(void *pvParam)
         switch (s_state) {
             case MACHINE_STATE_RUN_AUTO: {
                 bool still_running = auto_sequence_tick();
-                if (!still_running && auto_sequence_get_step() == AUTO_STEP_COMPLETE) {
+                /* Notify UI once when Release is active and waiting for operator */
+                if (auto_sequence_is_release_waiting() && !s_release_notified) {
+                    app_event_t release_evt = { .type = EVT_RELEASE_DONE_NEEDED };
+                    xQueueSend(g_ui_event_queue, &release_evt, pdMS_TO_TICKS(10));
+                    s_release_notified = true;
+                }
+                /* Notify UI once when waiting for operator confirmation */
+                if (auto_sequence_is_waiting_confirm() && !s_confirm_notified) {
+                    app_event_t confirm_evt = { .type = EVT_MOULD_CONFIRM_NEEDED };
+                    xQueueSend(g_ui_event_queue, &confirm_evt, pdMS_TO_TICKS(10));
+                    s_confirm_notified = true;
+                }
+                if (!still_running) {
                     ESP_LOGI(TAG, "Auto sequence finished");
-                    /* Stay in RUN_AUTO state, UI will show completion screen */
                 }
                 break;
             }

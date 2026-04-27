@@ -56,6 +56,14 @@ esp_err_t app_events_init(void)
  */
 static void on_button_press(int button_id)
 {
+    /* button_id == 3 (NUM_BUTTONS) is the E-stop sentinel from GPIO-level check */
+    if (button_id == (int)BTN_ID_COUNT) {
+        app_event_t evt = { .type = EVT_EMERGENCY_STOP };
+        xQueueSend(g_machine_event_queue, &evt, pdMS_TO_TICKS(10));
+        xQueueSend(g_ui_event_queue,      &evt, pdMS_TO_TICKS(10));
+        return;
+    }
+
     app_event_t event = {
         .type = EVT_BUTTON_PRESS,
         .data.button = (button_id_t)button_id,
@@ -154,9 +162,9 @@ void app_main(void)
 
     /* Log loaded settings */
     const machine_settings_t *settings = nvs_settings_get();
-    ESP_LOGI(TAG, "Settings: Mixer=%us, MouldA=%us, MouldB=%us, Release=%us, Heater=%us",
-             settings->mixer_time_s, settings->mould_a_time_s,
-             settings->mould_b_time_s, settings->release_time_s,
-             settings->heater_time_s);
+    ESP_LOGI(TAG, "Settings: MixFill=%us, MouldAIn=%us, PressTime=%us, MouldAOut=%us, PressGap=%us, PreRelease=%us",
+             settings->mixer_fill_s, settings->mould_a_in_s,
+             settings->press_time_s, settings->mould_a_out_s,
+             settings->press_gap_s, settings->pre_release_s);
 }
 

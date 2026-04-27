@@ -13,11 +13,12 @@ extern "C" {
 
 /** Settings structure stored in NVS. */
 typedef struct {
-    uint16_t mixer_time_s;
-    uint16_t mould_a_time_s;
-    uint16_t mould_b_time_s;
-    uint16_t release_time_s;
-    uint16_t heater_time_s;
+    uint16_t mixer_fill_s;    /* Mixer run time to fill Mould A */
+    uint16_t mould_a_in_s;    /* Mould A positioning time */
+    uint16_t press_time_s;    /* Mould B press duration (per press) */
+    uint16_t mould_a_out_s;   /* Mould A return time */
+    uint16_t press_gap_s;     /* Settle between two presses */
+    uint16_t pre_release_s;   /* Settle before release fires */
 } machine_settings_t;
 
 /**
@@ -34,7 +35,7 @@ const machine_settings_t *nvs_settings_get(void);
 
 /**
  * @brief Update a single setting in memory only (no NVS write).
- * @param index Setting index (0=mixer, 1=mould_a, 2=mould_b, 3=release, 4=heater).
+ * @param index Setting index (0=mixer_fill, 1=mould_a_in, 2=press_time, 3=mould_a_out, 4=press_gap, 5=pre_release).
  * @param value New value in seconds.
  * @return ESP_OK on success.
  */
@@ -42,7 +43,7 @@ esp_err_t nvs_settings_update(uint8_t index, uint16_t value);
 
 /**
  * @brief Update a single setting by index and persist to NVS immediately.
- * @param index Setting index (0=mixer, 1=mould_a, 2=mould_b, 3=release, 4=heater).
+ * @param index Setting index (0=mixer_fill, 1=mould_a_in, 2=press_time, 3=mould_a_out, 4=press_gap, 5=pre_release).
  * @param value New value in seconds.
  * @return ESP_OK on success.
  */
@@ -61,15 +62,16 @@ esp_err_t nvs_settings_save_all(void);
 esp_err_t nvs_settings_reset_defaults(void);
 
 /** Number of configurable timer settings. */
-#define SETTINGS_COUNT 5
+#define SETTINGS_COUNT 6
 
-/** Names for settings display. */
+/** Names for settings display (max 10 chars for OLED). */
 #define SETTINGS_NAMES { \
-    "Mixer Time",   \
-    "Mould A Time", \
-    "Mould B Time", \
-    "Release Time", \
-    "Heater Time"   \
+    "Mixer Fill",  \
+    "Mould A In",  \
+    "Press Time",  \
+    "MouldA Out",  \
+    "Press Gap",   \
+    "PreRelease"   \
 }
 
 #ifdef __cplusplus
